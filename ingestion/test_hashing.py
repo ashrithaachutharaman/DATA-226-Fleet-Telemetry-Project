@@ -1,19 +1,79 @@
-"""Tests for B13 (run from the repo root: pytest ingestion/test_hashing.py)."""
+"""Tests for B13 (run from the repo root: python -m pytest ingestion/test_hashing.py)."""
 
 import hashlib
 import hmac
 
 import pytest
 
-from hashing import (
+from ingestion.hashing import (
     DEFAULT_HEX_LENGTH,
     SALT_ENV_VAR,
     hash_vehicle_id,
     load_salt,
     pseudonymize_event,
 )
+from ingestion.schema import (
+    SCHEMA_VERSION,
+    TRIP_UPDATE_EVENT_FIELDS,
+    VEHICLE_EVENT_FIELDS,
+    make_trip_update_event_id,
+    make_vehicle_event_id,
+    validate,
+)
 
 SALT = b"test-salt-not-a-real-secret"
+
+# Contains non-hex characters, so a hex token can never contain it by chance.
+RAW_ID = "VTA-7012"
+
+
+def vehicle_event(**overrides):
+    """A record built to the B4 vehicle-event schema (passes validate())."""
+    event_ts = 1700000000000
+    event = {
+        "event_id": make_vehicle_event_id("vta", RAW_ID, event_ts),
+        "schema_version": SCHEMA_VERSION,
+        "source": "vta",
+        "vehicle_id": RAW_ID,
+        "route_id": "22",
+        "trip_id": "3156234",
+        "direction_id": 0,
+        "event_ts": event_ts,
+        "ingest_ts": event_ts + 15000,
+        "lat": 37.3352,
+        "lon": -121.8811,
+        "bearing": 270.0,
+        "speed_mps": 8.5,
+        "current_status": "IN_TRANSIT_TO",
+        "stop_id": "4523",
+    }
+    event.update(overrides)
+    return event
+
+
+def trip_update_event(**overrides):
+    """A record built to the B4 trip-update schema (passes validate())."""
+    event_ts = 1700000000000
+    event = {
+        "event_id": make_trip_update_event_id("bart", "t-1", 3, event_ts),
+        "schema_version": SCHEMA_VERSION,
+        "source": "bart",
+        "trip_id": "t-1",
+        "route_id": "red",
+        "vehicle_id": RAW_ID,
+        "stop_id": "12TH",
+        "stop_sequence": 3,
+        "delay_sec": 60,
+        "event_ts": event_ts,
+        "ingest_ts": event_ts + 5000,
+    }
+    event.update(overrides)
+    return event
+
+
+def test_test_events_are_valid_against_schema():
+    assert validate(vehicle_event(), VEHICLE_EVENT_FIELDS) == []
+    assert validate(trip_update_event(), TRIP_UPDATE_EVENT_FIELDS) == []
 
 
 def test_deterministic():
@@ -34,8 +94,14 @@ def test_different_salts_give_different_tokens():
 
 
 def test_source_keeps_agencies_apart():
-    assert hash_vehicle_id("1001", SALT, source="BART") != hash_vehicle_id(
-        "1001", SALT, source="VTA"
+    assert hash_vehicle_id("1001", SALT, source="bart") != hash_vehicle_id(
+        "1001", SALT, source="vta"
+    )
+
+
+def test_source_is_case_insensitive():
+    assert hash_vehicle_id("1001", SALT, source="VTA") == hash_vehicle_id(
+        "1001", SALT, source="vta"
     )
 
 
@@ -73,37 +139,72 @@ def test_empty_salt_rejected():
         hash_vehicle_id("1234", b"")
 
 
-def test_pseudonymize_event_replaces_only_vehicle_id():
-    event = {
-        "vehicle_id": "1234",
-        "ts": 1700000000,
-        "lat": 37.33,
-        "lon": -121.89,
-        "speed": 8.5,
-        "route": "22",
-        "trip": "t-1",
-        "source": "VTA",
-    }
+def test_pseudonymize_vehicle_event_changes_only_vehicle_id_and_event_id():
+    event = vehicle_event()
     original = dict(event)
     out = pseudonymize_event(event, SALT)
 
     assert event == original  # input not mutated
-    assert out["vehicle_id"] != "1234"
-    assert "1234" not in out["vehicle_id"]
-    assert out["vehicle_id"] == hash_vehicle_id("1234", SALT, source="VTA")
-    assert {k: v for k, v in out.items() if k != "vehicle_id"} == {
-        k: v for k, v in original.items() if k != "vehicle_id"
-    }
+    assert out["vehicle_id"] == hash_vehicle_id(RAW_ID, SALT, source="vta")
+    changed = {k for k in out if out[k] != original[k]}
+    assert changed == {"vehicle_id", "event_id"}
+    assert set(out) == set(original)
+
+
+def test_pseudonymized_vehicle_event_still_matches_schema():
+    out = pseudonymize_event(vehicle_event(), SALT)
+    assert validate(out, VEHICLE_EVENT_FIELDS) == []
+
+
+def test_raw_vehicle_id_appears_nowhere_in_output():
+    out = pseudonymize_event(vehicle_event(), SALT)
+    leaks = {k: v for k, v in out.items() if RAW_ID in str(v)}
+    assert leaks == {}
+
+
+def test_event_id_is_rebuilt_from_hashed_id():
+    out = pseudonymize_event(vehicle_event(), SALT)
+    assert out["event_id"] == make_vehicle_event_id(
+        "vta", out["vehicle_id"], out["event_ts"]
+    )
+
+
+def test_event_id_stays_deterministic_for_duplicate_detection():
+    first = pseudonymize_event(vehicle_event(), SALT)
+    second = pseudonymize_event(vehicle_event(), SALT)
+    assert first["event_id"] == second["event_id"]
+
+
+def test_trip_update_with_vehicle_hashes_id_and_keeps_event_id():
+    event = trip_update_event()
+    out = pseudonymize_event(event, SALT)
+    assert out["vehicle_id"] == hash_vehicle_id(RAW_ID, SALT, source="bart")
+    assert out["event_id"] == event["event_id"]  # holds no vehicle ID
+    assert RAW_ID not in str(out)
+    assert validate(out, TRIP_UPDATE_EVENT_FIELDS) == []
+
+
+def test_trip_update_with_none_vehicle_id_passes_through():
+    event = trip_update_event(vehicle_id=None)
+    out = pseudonymize_event(event, SALT)
+    assert out == event
+    assert out is not event
+    assert validate(out, TRIP_UPDATE_EVENT_FIELDS) == []
+
+
+def test_event_without_vehicle_id_field_passes_through():
+    event = {"ts": 1}
+    assert pseudonymize_event(event, SALT) == event
+
+
+def test_empty_string_vehicle_id_in_event_rejected():
+    with pytest.raises(ValueError):
+        pseudonymize_event(vehicle_event(vehicle_id=""), SALT)
 
 
 def test_pseudonymize_event_without_source_still_works():
     out = pseudonymize_event({"vehicle_id": "1234", "ts": 1}, SALT)
     assert out["vehicle_id"] == hash_vehicle_id("1234", SALT)
-
-
-def test_pseudonymize_event_requires_vehicle_id():
-    with pytest.raises(KeyError):
-        pseudonymize_event({"ts": 1}, SALT)
 
 
 def test_load_salt_reads_env():

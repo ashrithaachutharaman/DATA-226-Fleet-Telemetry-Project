@@ -1,0 +1,14 @@
+# Pin exact versions once everyone's environment works (pip freeze).
+pyspark
+confluent-kafka
+gtfs-realtime-bindings
+requests
+python-dotenv
+pymongo
+pandas
+pyarrow
+numpy
+matplotlib
+datasketch
+jupyter
+pytest
