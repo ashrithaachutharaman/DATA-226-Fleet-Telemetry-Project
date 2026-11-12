@@ -1,6 +1,6 @@
 # Real-Time Fleet Telemetry Pipeline: From Bay Area Transit to Autonomous Vehicles
 
-DATA 228 term project · Ashritha Achutharaman, Peter Harlan, Jason Letargo
+DATA 226 term project · Ashritha Achutharaman, Peter Harlan, Jason Letargo
 
 A streaming pipeline that ingests live GTFS-realtime feeds (511, BART, VTA) through Apache Kafka, processes them with Spark Structured Streaming, detects rare operational events (bus bunching, delay propagation, stalled vehicles), and benchmarks how design choices trade storage and latency against detection recall, measured against exact offline ground truth.
 
