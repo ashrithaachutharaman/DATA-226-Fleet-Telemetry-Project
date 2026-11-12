@@ -4,7 +4,8 @@ Two independent techniques, so the report can compare them:
 
 1. k-anonymity by small-group suppression (`k_anonymize_summary`)
    Publish "distinct vehicles per group" only for groups with at least k
-   distinct vehicles. Optionally coarsen coordinates first
+   distinct vehicles. This is minimum-group-size (threshold) suppression on
+   aggregate counts, the summary-table version of k-anonymity. Optionally coarsen coordinates first
    (`coarsen_coordinates`) so groups are big enough to survive. This is
    deterministic. It does not protect against someone differencing several
    releases.
@@ -17,6 +18,16 @@ Two independent techniques, so the report can compare them:
    histogram by at most max_cells_per_vehicle). Releasing the same data several
    times spends budget: epsilons add up.
 
+   Privacy unit: one vehicle. The release protects whether a vehicle appears
+   at all in this release (sensitivity = max_cells_per_vehicle).
+
+   Choosing max_cells_per_vehicle is a bias/noise trade-off. Too small and
+   vehicles that legitimately appear in many cells (a bus is in every hour it
+   is in service) get cut, so counts are biased low. Too large and the noise
+   scale grows. Set it from public knowledge of the data, for example the
+   number of service hours in the window when grouping by hour, not from the
+   private data itself.
+
 Notes
 - Both functions expect pseudonymized vehicle IDs (B13). Hashing alone is not a
   privacy guarantee for published summaries, which is why this module exists.
@@ -26,8 +37,11 @@ Notes
 - The DP function only knows the cells present in the data unless you pass
   `domain`. For a strict guarantee, pass the full public list of possible
   groups (for example every route and hour) so empty cells are noised too.
-- Column names `vehicle_id`, `lat` and `lon` follow the common vehicle-event
-  schema (card B4).
+- Missing group values (for example a null `route_id`, which the schema
+  allows) are kept as their own group by both functions, never silently
+  dropped. With `domain`, include a null row if that group should be released.
+- Column names `vehicle_id`, `route_id`, `lat` and `lon` follow the common
+  vehicle-event schema (card B4).
 """
 
 from typing import Optional, Sequence, Tuple
@@ -73,7 +87,8 @@ def k_anonymize_summary(
     Returns (published, n_suppressed). `published` has the group columns plus
     `n_vehicles`, and every row covers at least k distinct vehicles.
     `n_suppressed` is the number of groups removed, useful for reporting the
-    utility cost of a given k.
+    utility cost of a given k. Rows with a missing group value form their own
+    group.
     """
     if k < 1:
         raise ValueError("k must be at least 1")
@@ -124,7 +139,7 @@ def laplace_noisy_counts(
 def bound_contributions(
     df: pd.DataFrame,
     group_cols: Sequence[str],
-    max_cells: int = 1,
+    max_cells: int,
     id_col: str = "vehicle_id",
     rng: Optional[np.random.Generator] = None,
 ) -> pd.DataFrame:
@@ -132,6 +147,8 @@ def bound_contributions(
 
     A vehicle can show up in many groups (different routes, hours, areas).
     Capping that number is what makes the DP sensitivity equal to `max_cells`.
+    There is no default: see the module docstring for how to choose it.
+    Missing group values count as a group.
     """
     if max_cells < 1:
         raise ValueError("max_cells must be at least 1")
@@ -148,7 +165,7 @@ def dp_distinct_vehicle_counts(
     df: pd.DataFrame,
     group_cols: Sequence[str],
     epsilon: float,
-    max_cells_per_vehicle: int = 1,
+    max_cells_per_vehicle: int,
     id_col: str = "vehicle_id",
     domain: Optional[pd.DataFrame] = None,
     rng: Optional[np.random.Generator] = None,
@@ -156,38 +173,62 @@ def dp_distinct_vehicle_counts(
 ) -> pd.DataFrame:
     """Epsilon-DP count of distinct vehicles per group (one release).
 
+    Privacy unit is one vehicle: the release protects whether a vehicle appears
+    at all in it. Sensitivity is `max_cells_per_vehicle`.
+
+    max_cells_per_vehicle: most groups one vehicle may count toward. Required,
+        because the right value depends on the grouping: grouping by route and
+        hour, a bus in service 12 hours needs 12 or its counts are cut. Pick it
+        from public knowledge (service hours, number of routes), not from the
+        private data. Smaller means less noise but more undercounting.
     domain: DataFrame of all possible groups (the group columns). When given,
         every group in it is released, with zero for empty ones, and groups
-        outside it are dropped. Use this for a strict guarantee.
-    include_true_counts: adds an `n_vehicles` column with the exact counts.
+        outside it are dropped. Use this for a strict guarantee. Without it,
+        the groups present in `df` are released.
+    include_true_counts: adds an `n_vehicles` column with the real distinct
+        vehicle counts from `df`, computed before contribution bounding, so an
+        accuracy evaluation sees both the bias from bounding and the noise.
         Only for evaluating accuracy (for example B28 trade-off curves). Never
         publish it.
+
+    Missing group values (a null `route_id`) are kept as their own group.
 
     Returns the group columns plus `n_vehicles_dp`.
     """
     rng = _get_rng(rng)
     group_cols = list(group_cols)
 
+    def distinct_counts(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+        return (
+            frame.groupby(group_cols, dropna=False)[id_col]
+            .nunique()
+            .rename(name)
+            .reset_index()
+        )
+
+    true_counts = distinct_counts(df, "n_vehicles")
     bounded = bound_contributions(df, group_cols, max_cells_per_vehicle, id_col, rng)
-    counts = (
-        bounded.groupby(group_cols)[id_col].nunique().rename("n_vehicles").reset_index()
-    )
+    bounded_counts = distinct_counts(bounded, "n_bounded")
 
     if domain is not None:
-        counts = (
-            domain[group_cols]
-            .drop_duplicates()
-            .merge(counts, on=group_cols, how="left")
-            .fillna({"n_vehicles": 0})
-        )
-    counts["n_vehicles"] = counts["n_vehicles"].astype(int)
+        cells = domain[group_cols].drop_duplicates()
+    else:
+        cells = true_counts[group_cols]
+    counts = (
+        cells.merge(bounded_counts, on=group_cols, how="left")
+        .merge(true_counts, on=group_cols, how="left")
+        .fillna({"n_bounded": 0, "n_vehicles": 0})
+    )
 
     counts["n_vehicles_dp"] = laplace_noisy_counts(
-        counts["n_vehicles"],
+        counts["n_bounded"].astype(int),
         epsilon=epsilon,
         sensitivity=max_cells_per_vehicle,
         rng=rng,
     )
-    if not include_true_counts:
+    counts = counts.drop(columns="n_bounded")
+    if include_true_counts:
+        counts["n_vehicles"] = counts["n_vehicles"].astype(int)
+    else:
         counts = counts.drop(columns="n_vehicles")
     return counts.reset_index(drop=True)
