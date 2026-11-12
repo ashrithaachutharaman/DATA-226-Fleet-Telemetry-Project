@@ -7,6 +7,9 @@ from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from confluent_kafka import Consumer
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_NAMES = {
     "BA": "BART", "SIM": "Simulator", "WAYMO": "Waymo (autonomous)",
@@ -14,6 +17,7 @@ BASE_NAMES = {
 }
 AUTONOMOUS = {"WAYMO", "ZOOX"}
 INCLUDE_SIM = os.getenv("INCLUDE_SIM") == "1"   # simulated data is hidden unless you ask for it
+INCLUDE_REPLAY = os.getenv("INCLUDE_REPLAY") == "1"   # replayed recordings are hidden unless you ask for them
 NAMES_FILE = "data/agency_names.json"    # written by ingestion/producer_all.py
 SHAPES_FILE = "data/route_shapes.json"   # written by ingestion/fetch_routes.py
 BUCKET = 10      # seconds per timeline bucket
@@ -22,6 +26,8 @@ BUCKETS = 60     # 60 x 10 s = last 10 minutes
 lock = threading.Lock()
 trails = defaultdict(lambda: deque(maxlen=30))
 last_route = {}
+last_seen = {}   # (source, vehicle) -> time of its newest report
+recent = deque(maxlen=300)   # newest raw messages, for the on-page console
 route_counts = defaultdict(int)
 timeline = defaultdict(lambda: defaultdict(int))
 sources = defaultdict(lambda: {"events": 0, "vehicles": set(), "last": 0, "ages": deque(maxlen=200)})
@@ -43,6 +49,8 @@ def names():
 
 
 def kind(src):
+    if src.endswith("(replay)"):
+        return "Replay (not live)"
     if src in AUTONOMOUS:
         return "Autonomous"
     if src == "SIM":
@@ -51,10 +59,10 @@ def kind(src):
 
 
 def consume():
-    c = Consumer({"bootstrap.servers": "localhost:29092",
+    c = Consumer({"bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092"),
                   "group.id": f"viz-{uuid.uuid4()}",
                   "auto.offset.reset": "earliest"})
-    c.subscribe(["vehicle-positions", "trip-updates"])
+    c.subscribe(["vehicle-positions", "trip-updates"] + (["replay-positions", "replay-trips"] if INCLUDE_REPLAY else []))
     while True:
         msg = c.poll(1.0)
         if msg is None or msg.error():
@@ -66,7 +74,18 @@ def consume():
         src = e.get("source") or "unknown"
         if src == "SIM" and not INCLUDE_SIM:
             continue
-        if msg.topic() == "trip-updates":
+        if dict(msg.headers() or []).get("origin") == b"replay" or msg.topic().startswith("replay-") or src in ("WAYMO", "ZOOX", "ARGO", "AV"):   # no live feed exists for these
+            if not INCLUDE_REPLAY:
+                continue            # a recording is not live data
+            src = f"{src} (replay)"
+        try:
+            raw_key = msg.key()
+            key_txt = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key or "")
+        except Exception:
+            key_txt = ""
+        with lock:
+            recent.append({"t": time.time(), "topic": msg.topic(), "key": key_txt, "value": e})
+        if msg.topic() in ("trip-updates", "replay-trips"):
             d = e.get("delay_sec")
             if d is None:
                 continue
@@ -86,14 +105,15 @@ def consume():
         with lock:
             trails[(src, vid)].append([lon, lat])
             last_route[(src, vid)] = route
+            last_seen[(src, vid)] = max(last_seen.get((src, vid), 0), (e.get("event_ts") or int(time.time() * 1000)) / 1000)
             route_counts[(src, route)] += 1
             timeline[src][bucket] += 1
             s = sources[src]
             s["events"] += 1
             s["vehicles"].add(vid)
-            s["last"] = max(s["last"], e.get("event_ts") or 0)
+            s["last"] = max(s["last"], (e.get("event_ts") or 0) / 1000)       # event_ts is milliseconds (B4)
             if e.get("ingest_ts") and e.get("event_ts"):
-                s["ages"].append(e["ingest_ts"] - e["event_ts"])
+                s["ages"].append((e["ingest_ts"] - e["event_ts"]) / 1000)
 
 
 def snapshot():
@@ -109,7 +129,8 @@ def snapshot():
                         for k, v in sources.items()},
             "delays": {k: {"n": v["n"], "trips": len(v["trips"]), "avg": v["sum"] / v["n"], "max": v["max"]}
                        for k, v in delays.items() if v["n"]},
-            "trails": [{"src": k[0], "id": k[1], "route": last_route.get(k), "pts": list(p)[-12:]} for k, p in trails.items()],
+            "trails": [{"src": k[0], "id": k[1], "route": last_route.get(k), "pts": list(p)[-12:]} for k, p in trails.items() if last_seen.get(k, 0) > time.time() - 900],
+            "messages": list(recent)[-80:],
             "routes": [{"src": k[0], "route": k[1], "n": n} for k, n in top_routes],
             "timeline": {src: [tl.get(now_bucket - BUCKET * i, 0) for i in range(BUCKETS - 1, -1, -1)]
                          for src, tl in timeline.items()},
@@ -144,6 +165,7 @@ th,td{text-align:left;padding:4px 10px;border-bottom:1px solid #eee}
 .scroll{max-height:540px;overflow:auto}
 .legend{background:rgba(255,255,255,.92);padding:8px 10px;border-radius:6px;font-size:13px;line-height:1.5;box-shadow:0 1px 4px rgba(0,0,0,.3);max-height:300px;overflow:auto}
 .legend small{color:#777}
+.console{background:#111;color:#d6f5e3;font:12px/1.55 ui-monospace,Menlo,monospace;padding:8px;border-radius:6px;height:280px;overflow:auto;white-space:pre;word-break:normal}
 .bar{display:flex;align-items:center;margin:3px 0;font-size:13px}
 .bar span.l{width:110px} .bar small{color:#888}
 .bar div{height:14px;margin-right:6px;border-radius:2px}
@@ -176,6 +198,18 @@ button{font-size:12px;padding:3px 8px;margin-right:8px}
     <canvas id="tl" width="900" height="260"></canvas>
     <div id="legend" class="note"></div></div>
 </div>
+<div class="row">
+  <div class="card" style="flex:1 1 100%">
+    <h2>Live Kafka messages (what the console consumer shows)</h2>
+    <div style="margin-bottom:6px;font-size:13px">
+      <label><input type="checkbox" id="cpause"> Pause</label>
+      &nbsp; Filter: <input id="cfilter" placeholder="e.g. SC, VTA, a vehicle id, a route" style="width:260px;padding:3px">
+      <span id="ccount" style="color:#777;margin-left:10px"></span></div>
+    <div id="console" class="console">waiting for messages...</div>
+    <div class="note">Each line is one message exactly as it is in Kafka: time received, topic, key (the vehicle id), then the JSON value.
+    Only real messages from the live topics appear here.</div>
+  </div>
+</div>
 <script>
 const FIXED={WAYMO:"#00a6a6",ZOOX:"#ff7a00",BA:"#3b7dd8",SIM:"#7f8c8d"};
 const colorMap={}; let colorN=0;
@@ -203,19 +237,41 @@ if(HAVE_MAP){
   document.getElementById("map").innerHTML="<p style='padding:20px'>The map library could not load. It needs an internet connection (it loads from unpkg.com). The rest of the dashboard still works.</p>";
 }
 
+const GLIDE_MS=3000, vehMarkers={}, pathLines={};
+function glide(m,to){
+  const from=m.getLatLng();
+  if(from.lat===to[0]&&from.lng===to[1]) return;
+  if(m._raf) cancelAnimationFrame(m._raf);
+  let t0=null;
+  function step(t){
+    if(t0===null) t0=t;
+    const k=Math.min(1,(t-t0)/GLIDE_MS);
+    m.setLatLng([from.lat+(to[0]-from.lat)*k, from.lng+(to[1]-from.lng)*k]);
+    if(k<1) m._raf=requestAnimationFrame(step);
+  }
+  m._raf=requestAnimationFrame(step);
+}
 function drawMap(d){
   if(!HAVE_MAP) return;
-  pathLayer.clearLayers(); vehLayer.clearLayers();
-  const all=[];
+  const all=[], seen={}, cnt={};
   d.trails.forEach(t=>{
-    const c=colorOf(t.src), av=d.kinds[t.src]==="Autonomous";
-    const ll=t.pts.map(p=>[p[1],p[0]]);
-    if(ll.length>1) L.polyline(ll,{color:c,weight:av?4:2,opacity:0.65}).addTo(pathLayer);
-    const last=ll[ll.length-1]; all.push(last);
-    L.circleMarker(last,{radius:av?8:4,color:"#fff",weight:1,fillColor:c,fillOpacity:0.95})
-      .bindTooltip("<b>"+(d.names[t.src]||t.src)+"</b><br>route "+(t.route||"?")+" - vehicle "+t.id).addTo(vehLayer);
+    const key=t.src+"|"+t.id, c=colorOf(t.src), av=d.kinds[t.src]==="Autonomous";
+    const ll=t.pts.map(p=>[p[1],p[0]]), last=ll[ll.length-1];
+    seen[key]=1; all.push(last); cnt[t.src]=(cnt[t.src]||0)+1;
+    const tip="<b>"+(d.names[t.src]||t.src)+"</b><br>route "+(t.route||"?")+" - vehicle "+t.id;
+    let m=vehMarkers[key];
+    if(!m){
+      m=L.circleMarker(last,{radius:av?8:4,color:"#fff",weight:1,fillColor:c,fillOpacity:0.95}).bindTooltip(tip).addTo(vehLayer);
+      vehMarkers[key]=m;
+    }else{ m.setTooltipContent(tip); glide(m,last); }
+    let pl=pathLines[key];
+    if(ll.length>1){
+      if(!pl){ pl=L.polyline(ll,{color:c,weight:av?4:2,opacity:0.65}).addTo(pathLayer); pathLines[key]=pl; }
+      else pl.setLatLngs(ll);
+    }
   });
-  const cnt={}; d.trails.forEach(t=>{cnt[t.src]=(cnt[t.src]||0)+1;});
+  Object.keys(vehMarkers).forEach(k=>{ if(!seen[k]){ vehLayer.removeLayer(vehMarkers[k]); delete vehMarkers[k];
+    if(pathLines[k]){ pathLayer.removeLayer(pathLines[k]); delete pathLines[k]; } } });
   window.legendEl.innerHTML="<b>Who is who</b>"+Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).map(k=>
     "<div><span class='sw' style='background:"+colorOf(k)+"'></span>"+(d.names[k]||k)+" <small>("+cnt[k]+")</small></div>").join("");
   lastPts=all;
@@ -258,11 +314,27 @@ function drawTimeline(d){
     "<span class='sw' style='background:"+colorOf(k)+"'></span>"+(d.names[k]||k)).join(" &nbsp; ");
 }
 
+function drawConsole(d){
+  if(document.getElementById("cpause").checked) return;
+  const f=document.getElementById("cfilter").value.trim().toLowerCase();
+  const box=document.getElementById("console");
+  const rows=d.messages.slice().reverse().filter(m=>!f||(m.topic+" "+m.key+" "+JSON.stringify(m.value)).toLowerCase().indexOf(f)>=0).slice(0,60);
+  document.getElementById("ccount").textContent=rows.length+" of the last "+d.messages.length+" messages";
+  box.textContent="";
+  if(!rows.length){ box.textContent=d.messages.length?"no messages match the filter":"waiting for messages..."; return; }
+  rows.forEach(m=>{
+    const line=document.createElement("div");
+    const dot=document.createElement("span"); dot.className="sw"; dot.style.background=colorOf(m.value.source||"?");
+    line.appendChild(dot);
+    line.appendChild(document.createTextNode(new Date(m.t*1000).toLocaleTimeString()+"  "+m.topic+"  "+m.key+" | "+JSON.stringify(m.value)));
+    box.appendChild(line);
+  });
+}
 async function tick(){
   try{
     const d=await (await fetch("/data")).json();
     window.__names=d.names;
-    const rank={Autonomous:0,Transit:1,Simulated:2};
+    const rank={Autonomous:0,Transit:1,Simulated:2,"Replay (not live)":3};
     const keys=Object.keys(d.sources).sort((a,b)=>
       (rank[d.kinds[a]]-rank[d.kinds[b]])||(d.sources[b].vehicles-d.sources[a].vehicles));
     const nveh=keys.reduce((a,k)=>a+d.sources[k].vehicles,0);
@@ -270,6 +342,12 @@ async function tick(){
     const nd=Object.keys(d.delays).length;
     document.getElementById("stats").textContent=nev+" position events, "+nveh+" vehicles, "+keys.length+
       " sources"+(nd?", plus trip delays from "+nd+" source"+(nd>1?"s":""):"");
+    const newest=Math.max(0,...keys.map(k=>d.sources[k].last||0));
+    if(newest){ const ago=Math.max(0,Math.round(Date.now()/1000-newest));
+      document.getElementById("stats").textContent+=" | newest report "+(ago<120?ago+" s":Math.round(ago/60)+" min")+" ago (511 sends new positions about once a minute per agency)"; }
+    const notLive=keys.filter(k=>d.kinds[k]!=="Transit");
+    document.getElementById("stats").textContent+=notLive.length?
+      " | NOT LIVE: includes "+notLive.map(k=>d.names[k]||k).join(", "):" | live data only";
     if(!keys.length&&!nd) document.getElementById("stats").textContent="No real data yet. Start ingestion/producer_all.py (transit) or ingestion/producer_bart.py (BART delays).";
 
     const now=Date.now()/1000;
@@ -295,6 +373,7 @@ async function tick(){
       '<div class="bar"><span class="l">'+r.route+' <small>'+r.src+'</small></span><div style="background:'+
       colorOf(r.src)+';width:'+Math.max(2,r.n/mx*220)+'px"></div>'+r.n+'</div>').join("");
     drawTimeline(d);
+    drawConsole(d);
   }catch(e){document.getElementById("stats").textContent="waiting for server...";}
 }
 loadShapes(); setInterval(loadShapes,60000);

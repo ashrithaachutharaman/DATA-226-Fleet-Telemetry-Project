@@ -1,0 +1,12 @@
+Producer check for agency SC, Thu Nov 12 14:26:49 PST 2026
+
+1 key(s): 511 allows 60 requests/hour per key, so polling every 66s instead of 30s. Add a second key in API_511_KEYS to poll every ~33s.
+[14:26:58] SC: published 448 vehicle positions to vehicle-positions
+
+--- first 3 new messages the console consumer read (key|value)
+0131|{"event_id": "SC:0131:1794522411000", "schema_version": 1, "source": "SC", "vehicle_id": "0131", "route_id": "60", "trip_id": "4030150", "direction_id": 0, "event_ts": 1794522411000, "ingest_ts": 1794522418144, "lat": 37.2940559387207, "lon": -121.94981384277344, "bearing": null, "speed_mps": 0.0020577600225806236, "current_status": "IN_TRANSIT_TO", "stop_id": "62711"}
+0140|{"event_id": "SC:0140:1794522411000", "schema_version": 1, "source": "SC", "vehicle_id": "0140", "route_id": "27", "trip_id": "4024398", "direction_id": 0, "event_ts": 1794522411000, "ingest_ts": 1794522418144, "lat": 37.22996139526367, "lon": -121.98057556152344, "bearing": null, "speed_mps": 0.0005144400056451559, "current_status": "STOPPED_AT", "stop_id": "61188"}
+0154|{"event_id": "SC:0154:1794522411000", "schema_version": 1, "source": "SC", "vehicle_id": "0154", "route_id": "71", "trip_id": "4037031", "direction_id": 0, "event_ts": 1794522411000, "ingest_ts": 1794522418144, "lat": 37.32748031616211, "lon": -121.8111572265625, "bearing": null, "speed_mps": 0.0025722000282257795, "current_status": "STOPPED_AT", "stop_id": "65805"}
+
+SC messages from this run: 448; keyed by vehicle_id: 448; wrong key: 0
+PASS: the messages arrive in vehicle-positions, keyed by vehicle_id

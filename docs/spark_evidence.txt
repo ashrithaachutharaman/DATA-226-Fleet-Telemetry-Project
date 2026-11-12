@@ -1,0 +1,30 @@
+Spark archive check, Thu Nov 12 14:27:29 PST 2026
+
+== 1. Run the archive job on the Kafka topic for 120 seconds
+batch    0: 522035 rows | in      0.0 rows/s | processed  98090.0 rows/s | took 5321 ms | total 522035
+Stopped. Rows processed this run: 523170
+
+== 2. What was archived
+Using Spark's default log4j profile: org/apache/spark/log4j2-defaults.properties
+Using Spark's default log4j profile: org/apache/spark/log4j2-defaults.properties
+/opt/miniconda3/lib/python3.14/site-packages/pyspark/testing/utils.py:127: FutureWarning: PySpark does not yet fully support pandas >= 3.0.0. Some features may not work correctly. It is recommended to use pandas < 3.0.0 for now.
+  require_minimum_pandas_version()
+Rows archived: 523170  |  distinct event_id: 523170
++----------+------+------+
+|event_date|source| count|
++----------+------+------+
+|1970-01-21|    AC|106211|
+|1970-01-21|    MC|  1120|
+|1970-01-21|    SC|153976|
+|1970-01-21|    SF|258074|
+|2026-11-12|    AC|   622|
+|2026-11-12|    MC|    12|
+|2026-11-12|    SC|  1786|
+|2026-11-12|    SF|  1369|
++----------+------+------+
+
+== 3. Does the archive follow the B4 schema?
+rows: 523170; event_ts in epoch milliseconds: 3789; schema_version 1: 3789
+event dates: ['1970-01-21', '2026-11-12']
+sources: ['AC', 'MC', 'SC', 'SF']
+FAIL: no rows, or rows with old-format timestamps/schema. Wipe old messages: docker compose down && docker compose up -d, then restart the producers

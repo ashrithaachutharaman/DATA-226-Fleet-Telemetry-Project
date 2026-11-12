@@ -1,5 +1,5 @@
 #!/bin/bash
-cd ~/kafka-spark
+cd "$(dirname "$0")"
 MODE=${1:-sim}   # sim = simulator, live = 511 feed
 
 docker compose up -d

@@ -8,7 +8,7 @@ import requests
 from confluent_kafka import Producer
 from dotenv import load_dotenv
 from google.transit import gtfs_realtime_pb2
-from producer_511 import publish, trip_delay_events
+from producer_511 import TRIP_UPDATE_EVENT_FIELDS, now_ms, publish, trip_delay_events
 
 URL = "http://api.bart.gov/gtfsrt/tripupdate.aspx"   # no key needed; BART has no vehicle-position feed
 
@@ -28,7 +28,7 @@ while True:
         r.raise_for_status()
         feed = gtfs_realtime_pb2.FeedMessage()
         feed.ParseFromString(r.content)
-        n = publish(producer, topic, trip_delay_events(feed, "BA", int(time.time())), "trip_id")
+        n = publish(producer, topic, trip_delay_events(feed, "BA", now_ms()), "trip_id", TRIP_UPDATE_EVENT_FIELDS)
         print(f"[{time.strftime('%H:%M:%S')}] BART trip delays published: {n} "
               f"(from {len(feed.entity)} trips)", flush=True)
     except Exception as e:

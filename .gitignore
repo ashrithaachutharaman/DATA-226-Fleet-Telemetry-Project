@@ -1,42 +1,48 @@
-
-__pycache__/
-!data/README.md
-.DS_Store
+# Secrets — never commit API keys
 .env
-.idea/
-.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
 .venv/
-.vscode/
-*_evidence.txt
+venv/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data and large outputs (keep the repo small)
+data/*
+!data/README.md
+*.parquet
+*.pb
+*.tfrecord*
+*.pkl
+spark-warehouse/
+checkpoints/
+metastore_db/
+derby.log
+
+# Spark / Kafka logs
+logs/
+*.log
+
+# LaTeX build files
 *.aux
 *.bbl
 *.blg
-*.egg-info/
 *.fdb_latexmk
 *.fls
-*.log
 *.out
-*.parquet
-*.pb
-*.pkl
-*.py[cod]
-*.pyc
 *.synctex.gz
-*.tfrecord*
-# Data and large outputs (keep the repo small)
-# Jupyter
-# LaTeX build files
+
 # OS / editor
-# Python
-# Secrets — never commit API keys
-# Spark / Kafka logs
-checkpoints/
-data/
-data/*
-derby.log
-logs/
-metastore_db/
-nohup.out
-spark-warehouse/
+.DS_Store
 Thumbs.db
-venv/
+.vscode/
+.idea/
+
+# Local run output
+nohup.out
+*_evidence.txt
+demo_output.txt

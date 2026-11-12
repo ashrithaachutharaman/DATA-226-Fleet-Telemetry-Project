@@ -5,7 +5,7 @@
 cd "$(dirname "$0")"
 AGENCY=${1:-SC}
 EVID=producer_evidence.txt
-START=$(date +%s)
+START=$(( $(date +%s) * 1000 ))   # milliseconds, like ingest_ts
 { echo "Producer check for agency $AGENCY, $(date)"; echo; } > "$EVID"
 
 echo "== 1. Start a console consumer that listens for new messages on vehicle-positions"
@@ -37,7 +37,7 @@ for line in open(".consumed.tmp"):
         e = json.loads(val)
     except Exception:
         continue
-    if e.get("source") != agency or e.get("ingest_ts", 0) < start - 5:
+    if e.get("source") != agency or e.get("ingest_ts", 0) < start - 5000:
         continue
     fresh += 1
     if key == e.get("vehicle_id"):

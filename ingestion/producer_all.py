@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from confluent_kafka import Producer
 from dotenv import load_dotenv
-from producer_511 import BASE, fetch_feed, publish, vehicle_events
+from producer_511 import BASE, VEHICLE_EVENT_FIELDS, fetch_feed, now_ms, publish, vehicle_events
 
 load_dotenv()
 ap = argparse.ArgumentParser(description="Poll vehicle positions for many 511 agencies")
@@ -93,7 +93,7 @@ while True:
         started = time.time()
         try:
             feed = fetch_feed("vehiclepositions", agency, key)
-            n = publish(producer, topic, vehicle_events(feed, agency, int(time.time())), "vehicle_id")
+            n = publish(producer, topic, vehicle_events(feed, agency, now_ms()), "vehicle_id", VEHICLE_EVENT_FIELDS)
             total += n
             print(f"[{time.strftime('%H:%M:%S')}] {agency}: published {n}", flush=True)
             bad = n == 0

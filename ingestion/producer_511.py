@@ -1,24 +1,35 @@
-import argparse
-import hashlib
+"""Shared functions for 511 GTFS-realtime ingestion (a library, not a program).
+
+Run one of these instead:
+    python ingestion/producer_all.py     MAIN entry point: live vehicle positions, one request per agency
+    python ingestion/producer_bart.py    BART trip delays (BART has no vehicle-position feed)
+    python ingestion/producer_vta.py     one-feed VTA producer (the card demo)
+
+Every event follows the common schema in ingestion/schema.py (B4): timestamps are epoch
+milliseconds, speed is speed_mps, status is current_status, and schema_version is set.
+publish() runs validate() on each record and skips and logs bad ones.
+"""
 import json
 import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
-from confluent_kafka import Producer
-from dotenv import load_dotenv
 from google.transit import gtfs_realtime_pb2
+from ingestion.schema import (SCHEMA_VERSION, TRIP_UPDATE_EVENT_FIELDS,  # noqa: E402,F401
+                              VEHICLE_EVENT_FIELDS, make_trip_update_event_id,
+                              make_vehicle_event_id, validate)
 
 BASE = "https://api.511.org/transit"
 STATUS = {0: "INCOMING_AT", 1: "STOPPED_AT", 2: "IN_TRANSIT_TO"}
 
 
-def event_id(*parts) -> str:
-    return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
+def now_ms() -> int:
+    return int(time.time() * 1000)
 
 
-def fetch_feed(endpoint, agency, key):
+def fetch_feed(endpoint: str, agency: str, key: str) -> gtfs_realtime_pb2.FeedMessage:
     r = requests.get(f"{BASE}/{endpoint}", params={"api_key": key, "agency": agency}, timeout=30)
     r.raise_for_status()
     feed = gtfs_realtime_pb2.FeedMessage()
@@ -26,7 +37,8 @@ def fetch_feed(endpoint, agency, key):
     return feed
 
 
-def vehicle_events(feed, agency, ingest_ts):
+def vehicle_events(feed, agency: str, ingest_ts: int):
+    """GTFS-rt vehicle positions -> VEHICLE_EVENT records. ingest_ts is in milliseconds."""
     for ent in feed.entity:
         if not ent.HasField("vehicle"):
             continue
@@ -34,97 +46,79 @@ def vehicle_events(feed, agency, ingest_ts):
         if not v.HasField("position"):
             continue
         vehicle_id = v.vehicle.id or ent.id
-        event_ts = int(v.timestamp) or int(feed.header.timestamp) or ingest_ts
+        seconds = int(v.timestamp) or int(feed.header.timestamp)
+        event_ts = seconds * 1000 if seconds else ingest_ts          # GTFS-rt is in seconds
         pos = v.position
         yield {
-            "event_id": event_id("pos", agency, vehicle_id, event_ts),
+            "event_id": make_vehicle_event_id(agency, vehicle_id, event_ts),
+            "schema_version": SCHEMA_VERSION,
             "source": agency,
             "vehicle_id": vehicle_id,
             "route_id": v.trip.route_id or None,
             "trip_id": v.trip.trip_id or None,
             "direction_id": v.trip.direction_id if v.trip.HasField("direction_id") else None,
+            "event_ts": event_ts,
+            "ingest_ts": ingest_ts,
             "lat": pos.latitude,
             "lon": pos.longitude,
             "bearing": pos.bearing if pos.HasField("bearing") else None,
-            "speed": pos.speed if pos.HasField("speed") else None,
-            "stop_status": STATUS.get(v.current_status) if v.HasField("current_status") else None,
-            "event_ts": event_ts,
-            "ingest_ts": ingest_ts,
+            "speed_mps": pos.speed if pos.HasField("speed") else None,
+            "current_status": STATUS.get(v.current_status) if v.HasField("current_status") else None,
+            "stop_id": v.stop_id or None,
         }
 
 
-def trip_delay_events(feed, agency, ingest_ts):
+def trip_delay_events(feed, agency: str, ingest_ts: int):
+    """GTFS-rt trip updates -> TRIP_UPDATE_EVENT records (one per stop with a delay)."""
     for ent in feed.entity:
         if not ent.HasField("trip_update"):
             continue
         tu = ent.trip_update
-        event_ts = int(tu.timestamp) or int(feed.header.timestamp) or ingest_ts
+        if not tu.trip.trip_id:
+            continue
+        seconds = int(tu.timestamp) or int(feed.header.timestamp)
+        event_ts = seconds * 1000 if seconds else ingest_ts
         for stu in tu.stop_time_update:
             ev = stu.arrival if stu.HasField("arrival") else stu.departure
             if not ev.HasField("delay"):
                 continue
+            stop_sequence = stu.stop_sequence if stu.HasField("stop_sequence") else None
             yield {
-                "event_id": event_id("delay", agency, tu.trip.trip_id, stu.stop_id, event_ts),
+                "event_id": make_trip_update_event_id(agency, tu.trip.trip_id, stop_sequence, event_ts),
+                "schema_version": SCHEMA_VERSION,
                 "source": agency,
-                "trip_id": tu.trip.trip_id or None,
+                "trip_id": tu.trip.trip_id,
                 "route_id": tu.trip.route_id or None,
-                "direction_id": tu.trip.direction_id if tu.trip.HasField("direction_id") else None,
+                "vehicle_id": tu.vehicle.id or None,
                 "stop_id": stu.stop_id or None,
-                "stop_sequence": stu.stop_sequence if stu.HasField("stop_sequence") else None,
+                "stop_sequence": stop_sequence,
                 "delay_sec": ev.delay,
                 "event_ts": event_ts,
                 "ingest_ts": ingest_ts,
             }
 
 
-def publish(producer, topic, events, key_field):
-    n = 0
+def valid_events(events, fields):
+    """Pass through records that match the schema; log and skip the rest."""
+    bad = 0
     for e in events:
+        problems = validate(e, fields)
+        if problems:
+            bad += 1
+            if bad <= 3:
+                print(f"skipping invalid record ({'; '.join(problems)})", flush=True)
+            continue
+        yield e
+    if bad:
+        print(f"skipped {bad} invalid records in this batch", flush=True)
+
+
+def publish(producer, topic, events, key_field, fields):
+    """Validate, then produce each event keyed by key_field. Returns how many were published."""
+    n = 0
+    for e in valid_events(events, fields):
         producer.produce(topic, key=str(e.get(key_field) or ""), value=json.dumps(e))
         n += 1
         producer.poll(0)
     producer.flush()
     return n
-
-
-def main():
-    load_dotenv()
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--agency", default="RG")
-    ap.add_argument("--interval", type=int, default=75)
-    ap.add_argument("--feeds", choices=["vehicles", "trips", "both"], default="vehicles")
-    ap.add_argument("--once", action="store_true")
-    args = ap.parse_args()
-
-    key = os.getenv("API_511_KEY")
-    if not key or key.startswith("PASTE") or key.startswith("your-"):
-        sys.exit("Set API_511_KEY in .env")
-    trips_key = os.getenv("API_511_KEY_TRIPS") or key
-    servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092")
-    producer = Producer({"bootstrap.servers": servers, "linger.ms": 50})
-    pos_topic = os.getenv("KAFKA_TOPIC_POSITIONS", "vehicle-positions")
-    trip_topic = os.getenv("KAFKA_TOPIC_TRIPS", "trip-updates")
-
-    while True:
-        started = time.time()
-        ingest_ts = int(started)
-        try:
-            if args.feeds in ("vehicles", "both"):
-                feed = fetch_feed("vehiclepositions", args.agency, key)
-                n = publish(producer, pos_topic, vehicle_events(feed, args.agency, ingest_ts), "vehicle_id")
-                print(f"[{time.strftime('%H:%M:%S')}] vehicle-positions: published {n}", flush=True)
-            if args.feeds in ("trips", "both"):
-                feed = fetch_feed("tripupdates", args.agency, trips_key)
-                n = publish(producer, trip_topic, trip_delay_events(feed, args.agency, ingest_ts), "trip_id")
-                print(f"[{time.strftime('%H:%M:%S')}] trip-updates: published {n}", flush=True)
-        except requests.HTTPError as e:
-            print(f"HTTP error: {e} (429 means rate limit: raise --interval)", flush=True)
-        except Exception as e:
-            print(f"Poll failed: {e!r}", flush=True)
-        if args.once:
-            break
-        time.sleep(max(0, args.interval - (time.time() - started)))
-
-
-if __name__ == "__main__":
-    main()

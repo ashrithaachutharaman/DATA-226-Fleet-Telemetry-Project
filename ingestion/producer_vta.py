@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from confluent_kafka import Producer
 from dotenv import load_dotenv
-from producer_511 import fetch_feed, vehicle_events
+from producer_511 import VEHICLE_EVENT_FIELDS, fetch_feed, now_ms, valid_events, vehicle_events
 
 load_dotenv()
 ap = argparse.ArgumentParser()
@@ -57,10 +57,10 @@ def on_delivery(err, msg):
 
 def poll_once(key):
     """Fetch, decode, map, publish. Returns the number of vehicles published."""
-    now = int(time.time())
+    now = now_ms()                                                   # milliseconds (B4)
     feed = fetch_feed("vehiclepositions", args.agency, key)          # fetch + protobuf decode
     n = 0
-    for ev in vehicle_events(feed, args.agency, now):                # common schema
+    for ev in valid_events(vehicle_events(feed, args.agency, now), VEHICLE_EVENT_FIELDS):   # common schema, validated
         producer.produce(topic, key=str(ev["vehicle_id"]), value=json.dumps(ev),
                          on_delivery=on_delivery)                    # keyed by vehicle_id
         producer.poll(0)
