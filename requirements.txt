@@ -11,3 +11,4 @@ numpy
 matplotlib
 datasketch
 jupyter
+pytest
