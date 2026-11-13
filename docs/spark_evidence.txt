@@ -1,0 +1,25 @@
+Spark archive check, Thu Nov 12 19:49:55 PST 2026
+
+== 1. Run the archive job on the Kafka topic for 120 seconds
+batch    0:  1169 rows | in      0.0 rows/s | processed    485.7 rows/s | took 2405 ms | total 1169
+Stopped. Rows processed this run: 1817
+
+== 2. What was archived
+Using Spark's default log4j profile: org/apache/spark/log4j2-defaults.properties
+Using Spark's default log4j profile: org/apache/spark/log4j2-defaults.properties
+/opt/miniconda3/lib/python3.14/site-packages/pyspark/testing/utils.py:127: FutureWarning: PySpark does not yet fully support pandas >= 3.0.0. Some features may not work correctly. It is recommended to use pandas < 3.0.0 for now.
+  require_minimum_pandas_version()
+Rows archived: 1817  |  distinct event_id: 1817
++----------+------+-----+
+|event_date|source|count|
++----------+------+-----+
+|2026-11-13|    AC|  275|
+|2026-11-13|    SC|  894|
+|2026-11-13|    SF|  648|
++----------+------+-----+
+
+== 3. Does the archive follow the B4 schema?
+rows: 1817; event_ts in epoch milliseconds: 1817; schema_version 1: 1817
+event dates: ['2026-11-13']
+sources: ['AC', 'SC', 'SF']
+PASS: Kafka -> Spark -> Parquet works and every row follows the B4 schema
