@@ -8,19 +8,19 @@ Agencies: AC,MC,SC,SF
 
 == 4. Producer output (real feeds)
 1 key(s): one request every 66s
-[14:52:33] AC: published 343
-[14:53:39] MC: published 6
-[14:52:33] BART trip delays published: 1078 (from 83 trips)
-[14:53:03] BART trip delays published: 1087 (from 84 trips)
-[14:53:33] BART trip delays published: 1085 (from 84 trips)
+[19:19:42] AC: published 292
+[19:20:48] MC: published 0
+[19:19:42] BART trip delays published: 808 (from 71 trips)
+[19:20:12] BART trip delays published: 802 (from 70 trips)
+[19:20:42] BART trip delays published: 794 (from 69 trips)
 
 == 5. Is the data real and does it follow the schema?
 source      events  vehicles  newest report  verdict
 BA          649679         0            n/a  SCHEMA: 649679 records break the B4 schema (e.g. unexpected field 'direction_id'; 'schema_version' is required); TIME: 649679 timestamps are not epoch milliseconds
-SF          237384       966            n/a  SCHEMA: 237384 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 237384 timestamps are not epoch milliseconds
-SC          140092       584            n/a  SCHEMA: 140092 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 140092 timestamps are not epoch milliseconds
-AC           97223       486            n/a  SCHEMA: 97223 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 97223 timestamps are not epoch milliseconds
-MC             952         6            n/a  SCHEMA: 952 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 952 timestamps are not epoch milliseconds
+SF          237105       966            n/a  PRIVACY: 237105 vehicle ids are not hashed (B13); SCHEMA: 237105 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 237105 timestamps are not epoch milliseconds
+SC          139947       584            n/a  PRIVACY: 139947 vehicle ids are not hashed (B13); SCHEMA: 139947 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 139947 timestamps are not epoch milliseconds
+AC           97134       486            n/a  PRIVACY: 97134 vehicle ids are not hashed (B13); SCHEMA: 97134 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 97134 timestamps are not epoch milliseconds
+MC             949         6            n/a  PRIVACY: 949 vehicle ids are not hashed (B13); SCHEMA: 949 records break the B4 schema (e.g. unexpected field 'stop_status'; unexpected field 'speed'; 'schema_version' is required); TIME: 949 timestamps are not epoch milliseconds
 
 RESULT: NOT CLEAN. See the notes above.
 Messages written before the schema change stay in Kafka. To wipe them: docker compose down -v && docker compose up -d
