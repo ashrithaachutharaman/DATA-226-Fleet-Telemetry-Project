@@ -43,6 +43,39 @@ A full flow diagram will be added in `docs/`.
 | `report/` | LaTeX source of the IEEE report (synced from Overleaf) |
 | `data/` | Local data only; ignored by Git |
 
+## Common event schema (read this before writing a producer or Spark job) *********
+
+        Every record in the pipeline follows one schema, defined once in
+        [`ingestion/schema.py`](ingestion/schema.py) (card B4). Producers, Spark jobs,
+        detectors and privacy code all import it. Do not redefine fields elsewhere.
+
+**Two record types**
+        
+        | Record | Kafka topic | Used for |
+        | --- | --- | --- |
+        | Vehicle event (`VEHICLE_EVENT_FIELDS`) | `vehicle-positions` | Archive, bus bunching, stalled vehicles |
+        | Trip-update event (`TRIP_UPDATE_EVENT_FIELDS`) | `trip-updates` | Delay propagation |
+        
+**Rules**
+        
+        - **Timestamps are epoch milliseconds, UTC.** GTFS-realtime sends seconds, so multiply by 1000.
+        - Two timestamps: `event_ts` (when the vehicle reported, used for windows) and `ingest_ts` (when our producer received it).
+        - Units: meters, meters per second (`speed_mps`), degrees.
+        - `source` uses 511 operator codes (`SC` = VTA, `SF` = Muni, `BA` = BART); test data uses `fake`.
+        - Build `event_id` with `make_vehicle_event_id()` / `make_trip_update_event_id()`.
+        - Call `validate()` before publishing a record.
+        
+**How to use it**
+        
+        ```python
+        from ingestion.schema import VEHICLE_EVENT_FIELDS, validate, spark_schema
+        
+        problems = validate(record, VEHICLE_EVENT_FIELDS)    # [] means valid
+        schema = spark_schema(VEHICLE_EVENT_FIELDS)          # Spark StructType for from_json
+        ```
+        
+        Run `python ingestion/schema.py` to print an example record and the Spark schema.
+
 ## Setup
 
 1. Install Docker Desktop and Python 3.10+.
