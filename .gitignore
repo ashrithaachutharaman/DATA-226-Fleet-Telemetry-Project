@@ -41,8 +41,6 @@ logs/
 Thumbs.db
 .vscode/
 .idea/
-
-# Local run output
 nohup.out
 *_evidence.txt
 demo_output.txt

@@ -1,3 +1,7 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 import json
 import time
 import uuid
@@ -7,7 +11,7 @@ import matplotlib.pyplot as plt
 from confluent_kafka import Consumer
 
 consumer = Consumer({
-    "bootstrap.servers": "localhost:29092",
+    "bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092"),
     "group.id": f"viz-{uuid.uuid4()}",
     "auto.offset.reset": "earliest",   # also shows events already sent
 })
