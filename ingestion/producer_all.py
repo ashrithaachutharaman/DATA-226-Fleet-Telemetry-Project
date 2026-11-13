@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from confluent_kafka import Producer
 from dotenv import load_dotenv
-from producer_511 import BASE, VEHICLE_EVENT_FIELDS, fetch_feed, now_ms, publish, vehicle_events
+from producer_511 import BASE, VEHICLE_EVENT_FIELDS, fetch_feed, get_salt, now_ms, publish, vehicle_events
 
 load_dotenv()
 ap = argparse.ArgumentParser(description="Poll vehicle positions for many 511 agencies")
@@ -23,6 +23,10 @@ raw = os.getenv("API_511_KEYS") or os.getenv("API_511_KEY") or ""
 keys = [k.strip() for k in raw.split(",") if k.strip() and not k.strip().startswith(("PASTE", "your-"))]
 if not keys:
     sys.exit("Set API_511_KEY (or API_511_KEYS=key1,key2,key3 for teammates' keys) in .env")
+try:
+    get_salt()                      # B13: stop now if VEHICLE_ID_SALT is not set, instead of failing on every poll
+except ValueError as e:
+    sys.exit(str(e))
 # 511 allows 60 requests/hour per key. Spread requests evenly across all keys.
 gap = 3600 / (60 * len(keys)) * 1.1
 print(f"{len(keys)} key(s): one request every {gap:.0f}s", flush=True)

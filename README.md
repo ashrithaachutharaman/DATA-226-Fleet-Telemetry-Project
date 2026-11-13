@@ -85,5 +85,8 @@ Run these from the repo root with Kafka up (`docker compose up -d`) and a key in
 | `ingestion/av_replay.py`, `record_stream.py` | Replay and recording tools for the benchmarks; replays go to `replay-*` topics and are tagged with a Kafka header | see the docstring in each file |
 | `ingestion/simulator_producer.py` | Simulated data (source `SIM`), testing only | `python ingestion/simulator_producer.py` |
 
+Vehicle ids are hashed at ingestion (B13, `ingestion/hashing.py`) and `event_id` is built from the hashed id, so raw ids never reach Kafka.
+The producers need `VEHICLE_ID_SALT` in `.env` (ask Jason; it must be the same for everyone) and stop at start-up if it is missing.
+
 Dashboard: `python dashboard/viz_web.py`, then open http://localhost:8000.
 Checks: `./producer_check.sh SC` (producer to Kafka), `python ingestion/check_real.py` (only real data, follows the schema), `./spark_check.sh` (Kafka to Spark to Parquet).

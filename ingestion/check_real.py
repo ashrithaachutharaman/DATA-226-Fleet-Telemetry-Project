@@ -3,7 +3,7 @@
     python ingestion/check_real.py            # reads what is already in Kafka (about 10 seconds)
 
 It flags: simulated or replayed events in the live topics, source labels that have no live feed
-(Waymo, Zoox, Argoverse), records that break the schema (wrong or missing fields, timestamps that
+(Waymo, Zoox, Argoverse), vehicle ids that are not hashed (B13), records that break the schema (wrong or missing fields, timestamps that
 are not milliseconds), positions outside the Bay Area, and stale data.
 """
 import argparse
@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+import re
 import uuid
 from collections import defaultdict
 
@@ -28,6 +29,7 @@ args = ap.parse_args()
 
 NOT_LIVE_SOURCES = {"SIM", "WAYMO", "ZOOX", "ARGO", "AV"}   # no public live feed exists for these
 BBOX = (36.8, 38.6, -123.3, -121.0)                          # lat_min, lat_max, lon_min, lon_max
+HASHED = re.compile(r"^[0-9a-f]{32}$")                         # a B13 token: 32 hex characters
 MIN_MS = 1_577_836_800_000                                   # 2020-01-01 in ms: anything smaller is not milliseconds
 
 c = Consumer({"bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:29092"),
@@ -35,7 +37,7 @@ c = Consumer({"bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localho
 c.subscribe(args.topics.split(","))
 
 stat = defaultdict(lambda: {"events": 0, "vehicles": set(), "newest": 0, "outside": 0, "not_live": 0,
-                            "bad_schema": 0, "bad_time": 0})
+                            "bad_schema": 0, "bad_time": 0, "raw_ids": 0})
 first_problem = {}
 total = 0
 end = time.time() + args.seconds
@@ -59,6 +61,8 @@ while time.time() < end and empty < 3:
     headers = {k: v for k, v in (m.headers() or [])}
     if src in NOT_LIVE_SOURCES or headers.get("origin") in (b"replay", b"synthetic"):
         s["not_live"] += 1
+    if e.get("vehicle_id") and src not in NOT_LIVE_SOURCES and not HASHED.match(str(e["vehicle_id"])):
+        s["raw_ids"] += 1
     fields = TRIP_UPDATE_EVENT_FIELDS if "delay_sec" in e or "stop_sequence" in e else VEHICLE_EVENT_FIELDS
     problems = validate(e, fields)
     if problems:
@@ -87,6 +91,9 @@ for src, s in sorted(stat.items(), key=lambda kv: -kv[1]["events"]):
     if s["not_live"]:
         notes.append(f"NOT REAL: {s['not_live']} simulated/replayed/no-live-feed events")
         problems_found.append(src)
+    if s["raw_ids"]:
+        notes.append(f"PRIVACY: {s['raw_ids']} vehicle ids are not hashed (B13)")
+        problems_found.append(src)
     if s["bad_schema"]:
         notes.append(f"SCHEMA: {s['bad_schema']} records break the B4 schema (e.g. {first_problem[src]})")
         problems_found.append(src)
@@ -105,4 +112,4 @@ if problems_found:
     print("RESULT: NOT CLEAN. See the notes above.")
     print("Messages written before the schema change stay in Kafka. To wipe them: docker compose down -v && docker compose up -d")
     raise SystemExit(1)
-print(f"RESULT: CLEAN. {total} events: all real, none simulated or replayed, all follow the B4 schema.")
+print(f"RESULT: CLEAN. {total} events: all real, none simulated or replayed, all follow the B4 schema, vehicle ids hashed.")

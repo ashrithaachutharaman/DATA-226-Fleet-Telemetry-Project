@@ -8,11 +8,15 @@ import requests
 from confluent_kafka import Producer
 from dotenv import load_dotenv
 from google.transit import gtfs_realtime_pb2
-from producer_511 import TRIP_UPDATE_EVENT_FIELDS, now_ms, publish, trip_delay_events
+from producer_511 import TRIP_UPDATE_EVENT_FIELDS, get_salt, now_ms, publish, trip_delay_events
 
 URL = "http://api.bart.gov/gtfsrt/tripupdate.aspx"   # no key needed; BART has no vehicle-position feed
 
 load_dotenv()
+try:
+    get_salt()                      # B13: stop now if VEHICLE_ID_SALT is not set, instead of failing on every poll
+except ValueError as e:
+    sys.exit(str(e))
 ap = argparse.ArgumentParser()
 ap.add_argument("--interval", type=int, default=30)
 ap.add_argument("--once", action="store_true")
