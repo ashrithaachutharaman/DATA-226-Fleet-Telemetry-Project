@@ -179,7 +179,7 @@ button{font-size:12px;padding:3px 8px;margin-right:8px}
     <div class="note"><button id="fit">Fit map to vehicles</button><span id="mapnote"></span><br>
     Dots are the latest position of each vehicle. Lines of the same color behind a dot are its recent path.
     Faint long lines are the official routes. Use the box in the map's corner to turn layers on or off.
-    Larger dots are autonomous vehicles.</div></div>
+    Larger dots are autonomous vehicles. Vehicle ids are hashed for privacy (B13), so hovering a dot shows the first 8 characters of its token.</div></div>
   <div class="card" style="flex:0 1 560px"><h2>Who is reporting</h2>
     <div class="scroll"><table id="tbl"></table></div>
     <div class="note">Transit agencies come from the 511 feeds. Waymo and Zoox have no public live feed, so they
@@ -212,6 +212,8 @@ button{font-size:12px;padding:3px 8px;margin-right:8px}
 </div>
 <script>
 const FIXED={WAYMO:"#00a6a6",ZOOX:"#ff7a00",BA:"#3b7dd8",SIM:"#7f8c8d"};
+const HASHED=/^[0-9a-f]{32}$/;   // a B13 token: the hashed vehicle id
+function shortId(id){ return HASHED.test(id) ? id.slice(0,8)+"... (hashed)" : id; }
 const colorMap={}; let colorN=0;
 function colorOf(k){
   if(FIXED[k]) return FIXED[k];
@@ -258,7 +260,7 @@ function drawMap(d){
     const key=t.src+"|"+t.id, c=colorOf(t.src), av=d.kinds[t.src]==="Autonomous";
     const ll=t.pts.map(p=>[p[1],p[0]]), last=ll[ll.length-1];
     seen[key]=1; all.push(last); cnt[t.src]=(cnt[t.src]||0)+1;
-    const tip="<b>"+(d.names[t.src]||t.src)+"</b><br>route "+(t.route||"?")+" - vehicle "+t.id;
+    const tip="<b>"+(d.names[t.src]||t.src)+"</b><br>route "+(t.route||"?")+" - vehicle "+shortId(t.id);
     let m=vehMarkers[key];
     if(!m){
       m=L.circleMarker(last,{radius:av?8:4,color:"#fff",weight:1,fillColor:c,fillOpacity:0.95}).bindTooltip(tip).addTo(vehLayer);
@@ -348,6 +350,9 @@ async function tick(){
     const notLive=keys.filter(k=>d.kinds[k]!=="Transit");
     document.getElementById("stats").textContent+=notLive.length?
       " | NOT LIVE: includes "+notLive.map(k=>d.names[k]||k).join(", "):" | live data only";
+    const vids=d.trails.map(t=>t.id), rawIds=vids.filter(i=>!HASHED.test(i)).length;
+    document.getElementById("stats").textContent+=rawIds?
+      " | PRIVACY WARNING: "+rawIds+" vehicle ids are NOT hashed (B13)":(vids.length?" | vehicle ids hashed (B13)":"");
     if(!keys.length&&!nd) document.getElementById("stats").textContent="No real data yet. Start ingestion/producer_all.py (transit) or ingestion/producer_bart.py (BART delays).";
 
     const now=Date.now()/1000;

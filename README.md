@@ -121,5 +121,7 @@ Run these from the repo root with Kafka up (`docker compose up -d`) and a key in
 Vehicle ids are hashed at ingestion (B13, `ingestion/hashing.py`) and `event_id` is built from the hashed id, so raw ids never reach Kafka.
 The producers need `VEHICLE_ID_SALT` in `.env` (ask Jason; it must be the same for everyone) and stop at start-up if it is missing.
 
-Dashboard: `python dashboard/viz_web.py`, then open http://localhost:8000.
+**Live dashboard: [http://localhost:8000](http://localhost:8000)** (real Kafka data, updates every 2 seconds). Start it with `./demo.sh`, or run `python dashboard/viz_web.py` after the producers are running. A screenshot of a real run is in `docs/dashboard.png`.
+
+Docker Compose also starts MongoDB (`mongo`, port 27017) for the raw-event store (B11). Its address is `MONGO_URI` in `.env`.
 Checks: `./producer_check.sh SC` (producer to Kafka), `python ingestion/check_real.py` (only real data, follows the schema), `./spark_check.sh` (Kafka to Spark to Parquet).

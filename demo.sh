@@ -11,7 +11,16 @@ until docker info >/dev/null 2>&1; do echo "waiting for Docker Desktop..."; slee
 docker compose up -d >/dev/null 2>&1
 until [ "$(docker inspect -f '{{.State.Health.Status}}' kafka 2>/dev/null)" = "healthy" ]; do echo "waiting for Kafka..."; sleep 3; done
 say "Kafka: $(docker inspect -f '{{.State.Health.Status}}' kafka)"
-./create_topics.sh >/dev/null 2>&1
+# kafka-init (in docker-compose.yml) creates the topics. Wait until they exist.
+for i in $(seq 1 40); do
+  docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list 2>/dev/null | grep -qx vehicle-positions && break
+  echo "waiting for topics..."; sleep 3
+done
+say "Topics: $(docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list 2>/dev/null | tr '\n' ' ')"
+if docker inspect mongo >/dev/null 2>&1; then
+  for i in $(seq 1 40); do [ "$(docker inspect -f '{{.State.Health.Status}}' mongo 2>/dev/null)" = "healthy" ] && break; echo "waiting for MongoDB..."; sleep 3; done
+  say "MongoDB: $(docker inspect -f '{{.State.Health.Status}}' mongo 2>/dev/null)"
+fi
 
 say; say "== 2. Start dashboard and live producers"
 pkill -f dashboard/viz_web.py; pkill -f producer_all.py; pkill -f producer_bart.py; pkill -f producer_vta.py

@@ -44,3 +44,4 @@ Thumbs.db
 nohup.out
 *_evidence.txt
 demo_output.txt
+*.pyc
